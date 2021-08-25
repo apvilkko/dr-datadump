@@ -1,0 +1,13 @@
+{
+  "name": "dr-datadump",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "hex": "^0.1.0",
+    "midi-parser": "^1.0.1"
+  },
+  "scripts": {
+    "decode": "node ./src/dr-datadump.js"
+  }
+}
