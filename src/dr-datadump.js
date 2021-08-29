@@ -1,12 +1,34 @@
 const fs = require('fs')
+const path = require('path')
 const Parser = require('midi-parser')
-const hex = require('hex')
-
-const inFile = process.argv[2]
-const inData = fs.readFileSync(inFile)
+const { readMidiFile } = require('./midi')
+const yaml = require('yaml')
 
 const asHex = (g) => g.toString(16).padStart(2, '0')
 const hArr = (arr) => arr.map((x) => asHex(x)).join(' ')
+
+const exportMidi = (folder) => {
+  const files = fs.readdirSync(folder)
+  const songFile = fs.readFileSync(path.resolve(folder, 'song.yaml')).toString()
+  const songConfig = yaml.parse(songFile)
+  const midis = files.filter((x) => x.endsWith('.mid'))
+  let midiData = midis.reduce(
+    (acc, x) =>
+      acc.concat(
+        readMidiFile(
+          path.resolve(folder, x),
+          x.toLowerCase().indexOf('bass') > -1
+        )
+      ),
+    []
+  )
+  midiData = midiData.sort((a, b) => {
+    if (a.absoluteTime > b.absoluteTime) return 1
+    if (a.absoluteTime < b.absoluteTime) return -1
+    return 0
+  })
+  console.log(midiData)
+}
 
 // Starting from #35 = B0
 const MIDI_DRUM_MAP = [
@@ -60,19 +82,6 @@ const MIDI_DRUM_MAP = [
 ]
 
 const humanReadableDrum = (midiNote) => MIDI_DRUM_MAP[midiNote - 35] || ''
-
-const stats = {}
-
-const doStats = (i, data) => {
-  if (!stats[i]) {
-    stats[i] = {}
-  }
-  const value = asHex(data[i])
-  if (!stats[i][value]) {
-    stats[i][value] = 0
-  }
-  stats[i][value]++
-}
 
 const ROOT = 0x24
 const notes = [
@@ -132,127 +141,150 @@ const formatLength = (nL) => {
   return out
 }
 
-const output = []
+const analyze = (inFile, outfilename) => {
+  const stats = {}
+  const output = []
 
-const log = (a, ...params) => {
-  output.push(`${a || ''} ${params.join(' ')}`)
+  const log = (a, ...params) => {
+    output.push(`${a || ''} ${params.join(' ')}`)
+  }
+
+  const doStats = (i, data) => {
+    if (!stats[i]) {
+      stats[i] = {}
+    }
+    const value = asHex(data[i])
+    if (!stats[i][value]) {
+      stats[i][value] = 0
+    }
+    stats[i][value]++
+  }
+
+  const inData = fs.readFileSync(inFile)
+
+  const parser = new Parser()
+  const patterns = {}
+
+  parser.on('sysex', (byte, bytes) => {
+    log()
+    if (byte !== 0x41) {
+      log('sysex', asHex(byte))
+    }
+    if (
+      bytes[0] !== 0x10 ||
+      bytes[1] !== 0x00 ||
+      bytes[2] !== 0x41 ||
+      bytes[3] !== 0x12
+    ) {
+      log(hArr(bytes.slice(0, 4)))
+    }
+    const payload = bytes.slice(4)
+    //;[0, 1, 2, 3, 4].forEach((x) => doStats(x, payload))
+    if (payload[0] === 0x20) {
+      // Pattern header
+      const patternId = payload[1]
+      log(hArr(payload), toPatternName(patternId))
+      const timeSignature = payload[5] || 0
+      const measures = payload[6] || 0
+      const barDivision = timeSignature <= 6 ? 4 : 8
+      const offset = timeSignature <= 6 ? 2 : -3
+      const pulses = timeSignature + offset
+      patterns[patternId] = {
+        timeSignature: [pulses, barDivision],
+        measures,
+        expectedLength: (96 * pulses * measures) / (barDivision === 4 ? 1 : 2),
+        length: [0, 0],
+      }
+    } else if (payload[0] === 0x21 || payload[0] === 0x22) {
+      let pos = 0
+      const patternId = payload[1]
+      const isFill = payload[0] === 0x22
+      log(hArr(payload.slice(0, 5)))
+      pos += 5
+      while (pos < payload.length) {
+        const slice = payload.slice(pos, pos + 7)
+        const isDrum = slice[2] === 0x10
+        const hrNote = slice[1] ? toMidiNote(slice[1]) : '---'
+        const noteOffset = slice[0]
+        const flags = slice[slice.length - 1]
+        const flam = isDrum && flags & 0x4
+        const isRest = flags & 0x10
+        const fullPayload = slice.length === 7
+        const nLength = slice[5]
+        if (fullPayload) {
+          if (slice[4] !== 0) {
+            console.log(patternId, toPatternName(patternId), slice[4])
+          }
+          const long = flags & 0x20
+          const lengthIndex = isFill ? 1 : 0
+          patterns[patternId].length[lengthIndex] +=
+            noteOffset + (long ? 0x80 : 0)
+          doStats(4, slice)
+          doStats(6, slice)
+        }
+        log(
+          hArr(slice),
+          ' ',
+          hrNote,
+          isDrum ? 'DR' : slice[2] === 0x11 ? 'BS' : '--',
+          formatLength(nLength),
+          isRest && fullPayload
+            ? 'nop'
+            : isDrum
+            ? humanReadableDrum(slice[1])
+            : '',
+          flam ? '(flam)' : ''
+        )
+        pos += 7
+      }
+    } else {
+      log(hArr(payload), `(${payload.length} bytes)`)
+    }
+    //log(hArr(payload.slice(0, 5)), `(${payload.length} bytes)`)
+  })
+  parser.write(inData)
+  setTimeout(() => {
+    log('stats', JSON.stringify(stats, null, 2))
+
+    Object.keys(patterns).forEach((id) => {
+      const delta1 = patterns[id].length[0] - patterns[id].expectedLength
+      const delta2 = patterns[id].length[1] - patterns[id].expectedLength
+      const hasPattern = patterns[id].length[0] !== 0
+      const hasFill = patterns[id].length[1] !== 0
+      if (!hasPattern) {
+        log(id, toPatternName(Number(id)), 'empty pattern')
+      } else {
+        log(
+          id,
+          toPatternName(Number(id)),
+          patterns[id].expectedLength,
+          patterns[id].length[0],
+          patterns[id].length[1],
+          patterns[id].timeSignature,
+          patterns[id].measures,
+          delta1,
+          hasFill ? delta2 : '',
+          delta1 !== 0 ? 'MISMATCH' : '',
+          hasFill ? (delta2 !== 0 ? 'MISMATCH' : '') : ''
+        )
+      }
+    })
+
+    fs.writeFileSync(outfilename, output.join('\n'), { encoding: 'utf-8' })
+  }, 500)
 }
-
-const parser = new Parser()
-parser.on('midi', (cmd, channel, bytes) => {
-  log('midi', asHex(cmd), channel)
-  hex(bytes)
-})
-
-const patterns = {}
 
 const toPatternName = (id) => `(Pattern ${201 + id})`
 
-parser.on('sysex', (byte, bytes) => {
-  log()
-  if (byte !== 0x41) {
-    log('sysex', asHex(byte))
-  }
-  if (
-    bytes[0] !== 0x10 ||
-    bytes[1] !== 0x00 ||
-    bytes[2] !== 0x41 ||
-    bytes[3] !== 0x12
-  ) {
-    log(hArr(bytes.slice(0, 4)))
-  }
-  const payload = bytes.slice(4)
-  //;[0, 1, 2, 3, 4].forEach((x) => doStats(x, payload))
-  if (payload[0] === 0x20) {
-    // Pattern header
-    const patternId = payload[1]
-    log(hArr(payload), toPatternName(patternId))
-    const timeSignature = payload[5] || 0
-    const measures = payload[6] || 0
-    const barDivision = timeSignature <= 6 ? 4 : 8
-    const offset = timeSignature <= 6 ? 2 : -3
-    const pulses = timeSignature + offset
-    patterns[patternId] = {
-      timeSignature: [pulses, barDivision],
-      measures,
-      expectedLength: (96 * pulses * measures) / (barDivision === 4 ? 1 : 2),
-      length: [0, 0],
-    }
-  } else if (payload[0] === 0x21 || payload[0] === 0x22) {
-    let pos = 0
-    const patternId = payload[1]
-    const isFill = payload[0] === 0x22
-    log(hArr(payload.slice(0, 5)))
-    pos += 5
-    while (pos < payload.length) {
-      const slice = payload.slice(pos, pos + 7)
-      const isDrum = slice[2] === 0x10
-      const hrNote = slice[1] ? toMidiNote(slice[1]) : '---'
-      const noteOffset = slice[0]
-      const flags = slice[slice.length - 1]
-      const flam = isDrum && flags & 0x4
-      const isRest = flags & 0x10
-      const fullPayload = slice.length === 7
-      const nLength = slice[5]
-      if (fullPayload) {
-        if (slice[4] !== 0) {
-          console.log(patternId, toPatternName(patternId), slice[4])
-        }
-        const long = flags & 0x20
-        const lengthIndex = isFill ? 1 : 0
-        patterns[patternId].length[lengthIndex] +=
-          noteOffset + (long ? 0x80 : 0)
-        doStats(4, slice)
-        doStats(6, slice)
-      }
-      log(
-        hArr(slice),
-        ' ',
-        hrNote,
-        isDrum ? 'DR' : slice[2] === 0x11 ? 'BS' : '--',
-        formatLength(nLength),
-        isRest && fullPayload
-          ? 'nop'
-          : isDrum
-          ? humanReadableDrum(slice[1])
-          : '',
-        flam ? '(flam)' : ''
-      )
-      pos += 7
-    }
-  } else {
-    log(hArr(payload), `(${payload.length} bytes)`)
-  }
-  //log(hArr(payload.slice(0, 5)), `(${payload.length} bytes)`)
-})
-parser.write(inData)
-setTimeout(() => {
-  log('stats', JSON.stringify(stats, null, 2))
-  const outfilename = process.argv[3]
+const command = process.argv[2]
 
-  Object.keys(patterns).forEach((id) => {
-    const delta1 = patterns[id].length[0] - patterns[id].expectedLength
-    const delta2 = patterns[id].length[1] - patterns[id].expectedLength
-    const hasPattern = patterns[id].length[0] !== 0
-    const hasFill = patterns[id].length[1] !== 0
-    if (!hasPattern) {
-      log(id, toPatternName(Number(id)), 'empty pattern')
-    } else {
-      log(
-        id,
-        toPatternName(Number(id)),
-        patterns[id].expectedLength,
-        patterns[id].length[0],
-        patterns[id].length[1],
-        patterns[id].timeSignature,
-        patterns[id].measures,
-        delta1,
-        hasFill ? delta2 : '',
-        delta1 !== 0 ? 'MISMATCH' : '',
-        hasFill ? (delta2 !== 0 ? 'MISMATCH' : '') : ''
-      )
-    }
-  })
-
-  fs.writeFileSync(outfilename, output.join('\n'), { encoding: 'utf-8' })
-}, 500)
+switch (command) {
+  case 'analyze':
+    analyze(process.argv[3], process.argv[4])
+    break
+  case 'export':
+    exportMidi(process.argv[3])
+    break
+  default:
+    console.log('unknown command', command)
+}
