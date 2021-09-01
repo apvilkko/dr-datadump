@@ -2,6 +2,7 @@ const fs = require('fs')
 const path = require('path')
 const Parser = require('midi-parser')
 const { readMidiFile } = require('./midi')
+const { convert } = require('./dr')
 const yaml = require('yaml')
 
 const asHex = (g) => g.toString(16).padStart(2, '0')
@@ -27,7 +28,9 @@ const exportMidi = (folder) => {
     if (a.absoluteTime < b.absoluteTime) return -1
     return 0
   })
-  console.log(midiData)
+  //console.log(midiData)
+  const outData = convert(midiData, songConfig)
+  console.log(hArr(outData))
 }
 
 // Starting from #35 = B0

@@ -52,7 +52,19 @@ Index: song number, `00` corresponds to song 1
 
 ### 10: Song metadata
 
-TBD: Initial tempo, song chain
+`t1 t2 ss s2 ff`
+
+Default values (empty song): `47 00 7f 7f 0b`
+
+| byte | description                                  |
+| ---- | -------------------------------------------- |
+| `t1` | Initial tempo LSB, see below                 |
+| `t2` | Initial tempo MSB                            |
+| `ss` | Song chain: zero indexed song, 7f = no chain |
+| `s2` | ??: 00 when song chain used, 7f when not     |
+| `ff` | Flags: ??                                    |
+
+Tempo: Seems to be stored as (BPM - 20) \* 10 + 72. TBD!! does not apply to tempo near upper limit (260). Set to `47 00` if "undefined" i.e. initial tempo not set.
 
 ### 11: Pattern list
 
@@ -74,6 +86,8 @@ Index: pattern number, `00` corresponds to 201 (first user pattern)
 ### 20: Pattern metadata
 
 `bb mm kk tt ??`
+
+Default values (empty pattern): `02 02 00 00 00`
 
 | byte | description                                                                 |
 | ---- | --------------------------------------------------------------------------- |
