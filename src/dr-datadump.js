@@ -4,9 +4,8 @@ const Parser = require('midi-parser')
 const { readMidiFile } = require('./midi')
 const { convert } = require('./dr')
 const yaml = require('yaml')
-
-const asHex = (g) => g.toString(16).padStart(2, '0')
-const hArr = (arr) => arr.map((x) => asHex(x)).join(' ')
+const { hArr, asHex } = require('./util')
+const { readSysex } = require('./sysex')
 
 const exportMidi = (folder) => {
   const files = fs.readdirSync(folder)
@@ -29,8 +28,7 @@ const exportMidi = (folder) => {
     return 0
   })
   //console.log(midiData)
-  const outData = convert(midiData, songConfig)
-  console.log(hArr(outData))
+  return convert(midiData, songConfig)
 }
 
 // Starting from #35 = B0
@@ -281,12 +279,54 @@ const toPatternName = (id) => `(Pattern ${201 + id})`
 
 const command = process.argv[2]
 
+const messageHead = (x) => `${asHex(x[0])}${asHex(x[1])}`
+
+const toMidi = (sysExPayload) => {
+  const out = [0xf0, 0x41, 0x10, 0x00, 0x41, 0x12, ...sysExPayload, 0xf7]
+  const overflows = out.slice(1, out.length - 1).filter((x) => x > 0x7f)
+  if (overflows.length) {
+    console.log('warning, above 0x7f values in output', overflows, out)
+  }
+  return out
+}
+
 switch (command) {
   case 'analyze':
     analyze(process.argv[3], process.argv[4])
     break
   case 'export':
-    exportMidi(process.argv[3])
+    const inSong = process.argv[3]
+    const outData = exportMidi(inSong)
+    const newMessageMap = outData.reduce((acc, x) => {
+      acc[messageHead(x)] = x
+      return acc
+    }, {})
+    const newMessages = Object.keys(newMessageMap)
+    const replaced = {}
+    console.log(newMessages)
+    readSysex(process.argv[4]).then((originalSysex) => {
+      //console.log(originalSysex)
+      const newSysex = []
+      originalSysex.forEach((message) => {
+        const key = messageHead(message)
+        if (replaced[key]) {
+          return
+        }
+        if (newMessages.includes(key)) {
+          //console.log('replace message', key, newMessageMap[key])
+          newSysex.push(newMessageMap[key])
+          replaced[key] = true
+        } else {
+          newSysex.push(message)
+        }
+      })
+      const outSysexFilename = inSong.replace(/[^\w]+/g, '_') + '.syx'
+      console.log('Writing', outSysexFilename)
+      fs.writeFileSync(
+        outSysexFilename,
+        Buffer.from(newSysex.reduce((a, b) => a.concat(toMidi(b))))
+      )
+    })
     break
   default:
     console.log('unknown command', command)

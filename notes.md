@@ -56,15 +56,15 @@ Index: song number, `00` corresponds to song 1
 
 Default values (empty song): `47 00 7f 7f 0b`
 
-| byte | description                                  |
-| ---- | -------------------------------------------- |
-| `t1` | Initial tempo LSB, see below                 |
-| `t2` | Initial tempo MSB                            |
-| `ss` | Song chain: zero indexed song, 7f = no chain |
-| `s2` | ??: 00 when song chain used, 7f when not     |
-| `ff` | Flags: ??                                    |
+| byte | description                                           |
+| ---- | ----------------------------------------------------- |
+| `t1` | Initial tempo LSB (capped at 0x7f)                    |
+| `t2` | Initial tempo MSB                                     |
+| `ss` | Song chain: zero indexed song, 7f = no chain          |
+| `s2` | ??: 00 when song chain used, 7f when not              |
+| `ff` | Flags: bit 3 indicates + 0x80 to LSB, bits 0 & 1 TBD? |
 
-Tempo: Seems to be stored as (BPM - 20) \* 10 + 72. TBD!! does not apply to tempo near upper limit (260). Set to `47 00` if "undefined" i.e. initial tempo not set.
+Tempo: Stored as 10 times bpm. Set to `47 00` with `0b` flags if "undefined" i.e. initial tempo not set. Which decodes to -1 of the minimum bpm of 20 (199).
 
 ### 11: Pattern list
 

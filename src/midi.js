@@ -1,7 +1,12 @@
 const fs = require('fs')
+const { asHex } = require('./util')
 const { die } = require('./utils')
 
-const asHex = (g) => g.toString(16).padStart(2, '0')
+/**
+ * @typedef { import("./types").MidiEvent } MidiEvent
+ */
+
+const NOTE_OFF = 0x80
 
 const readVarLen = (d, i) => {
   let c
@@ -20,6 +25,12 @@ const readVarLen = (d, i) => {
   return [value, p]
 }
 
+/**
+ *
+ * @param {string} filename
+ * @param {boolean} isBass
+ * @returns {Array<MidiEvent>}
+ */
 const readMidiFile = (filename, isBass) => {
   const inFile = filename
   const inData = fs.readFileSync(inFile)
@@ -87,7 +98,7 @@ const readMidiFile = (filename, isBass) => {
             //console.log('note on', note, velocity)
             out.push({ absoluteTime, deltaTime, event, note, velocity, isBass })
             break
-          case 0x80:
+          case NOTE_OFF:
             // note off
             note = inData[pos++]
             velocity = inData[pos++]
@@ -107,4 +118,5 @@ const readMidiFile = (filename, isBass) => {
 
 module.exports = {
   readMidiFile,
+  NOTE_OFF,
 }
