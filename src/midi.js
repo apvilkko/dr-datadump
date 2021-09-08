@@ -6,6 +6,7 @@ const { die } = require('./utils')
  * @typedef { import("./types").MidiEvent } MidiEvent
  */
 
+const NOTE_ON = 0x90
 const NOTE_OFF = 0x80
 
 const readVarLen = (d, i) => {
@@ -91,7 +92,7 @@ const readMidiFile = (filename, isBass) => {
             const data = inData[pos++]
             //console.log('program change', data)
             break
-          case 0x90:
+          case NOTE_ON:
             // note on
             note = inData[pos++]
             velocity = inData[pos++]
@@ -118,5 +119,6 @@ const readMidiFile = (filename, isBass) => {
 
 module.exports = {
   readMidiFile,
+  NOTE_ON,
   NOTE_OFF,
 }

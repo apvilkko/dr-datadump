@@ -298,7 +298,10 @@ switch (command) {
     const inSong = process.argv[3]
     const outData = exportMidi(inSong)
     const newMessageMap = outData.reduce((acc, x) => {
-      acc[messageHead(x)] = x
+      if (!acc[messageHead(x)]) {
+        acc[messageHead(x)] = []
+      }
+      acc[messageHead(x)].push(x)
       return acc
     }, {})
     const newMessages = Object.keys(newMessageMap)
@@ -314,7 +317,9 @@ switch (command) {
         }
         if (newMessages.includes(key)) {
           //console.log('replace message', key, newMessageMap[key])
-          newSysex.push(newMessageMap[key])
+          newMessageMap[key].forEach((m) => {
+            newSysex.push(m)
+          })
           replaced[key] = true
         } else {
           newSysex.push(message)
@@ -324,7 +329,7 @@ switch (command) {
       console.log('Writing', outSysexFilename)
       fs.writeFileSync(
         outSysexFilename,
-        Buffer.from(newSysex.reduce((a, b) => a.concat(toMidi(b))))
+        Buffer.from(newSysex.reduce((a, b) => a.concat(toMidi(b)), []))
       )
     })
     break

@@ -1,5 +1,5 @@
 const { calculateChecksum } = require('./checksum')
-const { NOTE_OFF } = require('./midi')
+const { NOTE_OFF, NOTE_ON } = require('./midi')
 const { asHex, hArr } = require('./util')
 const { die } = require('./utils')
 
@@ -127,23 +127,21 @@ const patternData = (patternIndex, data) => {
     packets.push(currentPacket)
   }
 
-  return packets.reduce((acc, packet, i) => {
-    return acc.concat(
-      createCommand({
-        address: 0x21,
-        index: patternIndex,
-        i1: PACKET_INDEXES[i][0],
-        i2: PACKET_INDEXES[i][1],
-        data: packet,
-      })
-    )
-  }, [])
+  return packets.map((packet, i) => {
+    return createCommand({
+      address: 0x21,
+      index: patternIndex,
+      i1: PACKET_INDEXES[i][0],
+      i2: PACKET_INDEXES[i][1],
+      data: packet,
+    })
+  })
 }
 
 const songHeader = (songIndex, bpm, chain) => {
   const tempo = convertBpm(bpm)
   const data = [tempo[0], tempo[1], ...convertChain(chain), tempo[2]]
-  console.log('songHeader', data, bpm, convertBpm(bpm))
+  //console.log('songHeader', data, bpm, convertBpm(bpm))
   return createCommand({
     address: 0x10,
     index: songIndex,
@@ -208,10 +206,11 @@ const noteOffsToLengths = (events) => {
     .filter((x) => x !== -1)
   const arr = events.filter((x, i) => !uselessIndexes.includes(i))
   const out = []
+  console.log(events.length, uselessIndexes.length, arr.length)
   while (i < arr.length) {
     const curr = arr[i]
     let length = 24
-    if (curr.isBass) {
+    if (curr.isBass && curr.event === NOTE_ON) {
       // find the corresponding note off
       let j = i + 1
       let found = false
@@ -228,7 +227,9 @@ const noteOffsToLengths = (events) => {
         j++
       }
     }
-    out.push({ ...curr, length })
+    if (curr.event !== NOTE_OFF) {
+      out.push({ ...curr, length })
+    }
     i++
   }
 
@@ -244,7 +245,7 @@ const noteOffsToLengths = (events) => {
 }
 
 const finalizePattern = (data) => {
-  return data.concat([0x00, 0x0f, 0, 0, 0, 0, 0x10])
+  return [...data, [0x00, 0x0f, 0, 0, 0, 0, 0x10]]
 }
 
 /**
@@ -288,7 +289,9 @@ const convert = (midiEvents, songConfig) => {
       currentPattern = []
       ++i
     }
-    currentPattern.push(toPatternDataItem(event))
+    const currItem = toPatternDataItem(event)
+    //console.log('add', currItem.length, hArr(currItem))
+    currentPattern.push(currItem)
   })
   if (currentPattern.length) {
     outputPatterns.push(finalizePattern(currentPattern))
@@ -307,7 +310,8 @@ const convert = (midiEvents, songConfig) => {
   outputPatterns.forEach((pattern, i) => {
     const index = startPatternIndex + i
     out.push(commands.patternHeader(index, timeSignature, numMeasures, 0))
-    out.push(commands.patternData(index, pattern))
+    const datas = commands.patternData(index, pattern)
+    datas.forEach((d) => out.push(d))
   })
 
   return out
