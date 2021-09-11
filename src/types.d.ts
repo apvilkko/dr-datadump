@@ -6,4 +6,5 @@ export type MidiEvent = {
   velocity: number
   isBass: boolean
   length?: number
+  noop?: boolean
 }

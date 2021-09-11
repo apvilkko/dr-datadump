@@ -106,6 +106,10 @@ const readMidiFile = (filename, isBass) => {
             //console.log('note off', note, velocity)
             out.push({ absoluteTime, deltaTime, event, note, velocity, isBass })
             break
+          case 0xd0:
+            // aftertouch, ignore
+            pos++
+            break
           default:
             die('not handled event ' + asHex(event))
         }

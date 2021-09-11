@@ -167,12 +167,15 @@ const toPatternDataItem = (event) => {
   let offset = 0x7f & event.deltaTime
   let flags = 0
   // TODO flam
+  if (event.noop) {
+    flags |= 0x10
+  }
   if (event.deltaTime > 0x7f) {
     flags |= 0x20
     offset = 0x7f & (event.deltaTime - 0x80)
   }
   let l1 = 0
-  let l2 = event.length
+  let l2 = event.length || 0
   if (event.length > 0x7f) {
     l2 = event.length & 0x7f
     if (event.length & 0x80) {
@@ -183,9 +186,9 @@ const toPatternDataItem = (event) => {
   }
   const out = [
     offset,
-    event.note,
-    event.isBass ? 0x11 : 0x10,
-    0x7f & event.velocity,
+    event.noop ? 0 : event.note,
+    event.noop ? 0 : event.isBass ? 0x11 : 0x10,
+    event.noop ? 0 : 0x7f & event.velocity,
     l1,
     l2,
     flags,
@@ -258,6 +261,8 @@ const finalizePattern = (data) => {
   return [...data, [0x00, 0x0f, 0, 0, 0, 0, 0x10]]
 }
 
+const TICKS_PER_QUARTER = 96
+
 /**
  *
  * @param {Array<MidiEvent>} midiEvents
@@ -266,9 +271,10 @@ const finalizePattern = (data) => {
  */
 const convert = (midiEvents, songConfig) => {
   // for now, store everything as 8/4 with 2 measures to pack the most data into one pattern
-  const timeSignature = [8, 4]
+  let timeSignature = [8, 4]
   const numMeasures = 2
   const tempo = songConfig.tempo || 120
+  const introBeats = songConfig.introBeats || 0
 
   let startPatternIndex = songConfig.startPattern - 201 || 0
   if (startPatternIndex < 0) {
@@ -285,18 +291,38 @@ const convert = (midiEvents, songConfig) => {
     Math,
     midiEvents.map((x) => x.absoluteTime)
   )
-  const ticksInPattern = timeSignature[0] * 96 * numMeasures
+  const ticksInPattern = timeSignature[0] * TICKS_PER_QUARTER * numMeasures
   const amountPatternsNeeded = Math.ceil(maxTime / ticksInPattern)
-  console.log(`Need ${amountPatternsNeeded} patterns to store.`)
+  console.log(`Need at least ${amountPatternsNeeded} patterns to store.`)
+
+  const startingTimeAfterIntro = introBeats ? introBeats * TICKS_PER_QUARTER : 0
 
   const outputPatterns = []
   let currentPattern = []
   let i = 0
   processedEvents.forEach((event) => {
-    const currentIndex = Math.floor(event.absoluteTime / ticksInPattern)
+    let currentIndex = Math.floor(
+      (event.absoluteTime - startingTimeAfterIntro) / ticksInPattern
+    )
+    if (event.absoluteTime < startingTimeAfterIntro) {
+      currentIndex = 0
+    } else {
+      currentIndex++
+    }
     if (currentIndex > i) {
+      const fullBeatTicksElapsed =
+        (introBeats * 1 /* num intro measures */ +
+          i * timeSignature[0] * numMeasures) *
+        TICKS_PER_QUARTER
+      const remainder = event.absoluteTime - fullBeatTicksElapsed
       outputPatterns.push(finalizePattern(currentPattern))
       currentPattern = []
+      if (remainder > 0) {
+        // insert rest in new (current) pattern
+        currentPattern.push(
+          toPatternDataItem({ deltaTime: remainder, noop: true })
+        )
+      }
       ++i
     }
     const currItem = toPatternDataItem(event)
@@ -319,7 +345,14 @@ const convert = (midiEvents, songConfig) => {
   )
   outputPatterns.forEach((pattern, i) => {
     const index = startPatternIndex + i
-    out.push(commands.patternHeader(index, timeSignature, numMeasures, 0))
+    out.push(
+      commands.patternHeader(
+        index,
+        introBeats && i === 0 ? [introBeats, 4] : timeSignature,
+        introBeats && i === 0 ? 1 : numMeasures,
+        0
+      )
+    )
     const datas = commands.patternData(index, pattern)
     datas.forEach((d) => out.push(d))
   })
