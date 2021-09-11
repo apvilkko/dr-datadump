@@ -171,13 +171,23 @@ const toPatternDataItem = (event) => {
     flags |= 0x20
     offset = 0x7f & (event.deltaTime - 0x80)
   }
+  let l1 = 0
+  let l2 = event.length
+  if (event.length > 0x7f) {
+    l2 = event.length & 0x7f
+    if (event.length & 0x80) {
+      // set note length LSB bit 8
+      flags |= 1
+    }
+    l1 = event.length >> 8
+  }
   const out = [
     offset,
     event.note,
     event.isBass ? 0x11 : 0x10,
     0x7f & event.velocity,
-    0,
-    0x7f & event.length,
+    l1,
+    l2,
     flags,
   ]
   if (out.some((x) => x > 0x7f)) {

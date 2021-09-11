@@ -58,11 +58,11 @@ Default values (empty song): `47 00 7f 7f 0b`
 
 | byte | description                                           |
 | ---- | ----------------------------------------------------- |
-| `t1` | Initial tempo LSB (capped at 0x7f)                    |
+| `t1` | Initial tempo LSB first 7 bits                        |
 | `t2` | Initial tempo MSB                                     |
 | `ss` | Song chain: zero indexed song, 7f = no chain          |
 | `s2` | ??: 00 when song chain used, 7f when not              |
-| `ff` | Flags: bit 3 indicates + 0x80 to LSB, bits 0 & 1 TBD? |
+| `ff` | Flags: bit 3 is 8th bit of tempo LSB, bits 0 & 1 TBD? |
 
 Tempo: Stored as 10 times bpm. Set to `47 00` with `0b` flags if "undefined" i.e. initial tempo not set. Which decodes to -1 of the minimum bpm of 20 (199).
 
@@ -100,30 +100,30 @@ Default values (empty pattern): `02 02 00 00 00`
 
 Sequence of 7 byte structs
 
-`oo mm tt vv ?? ll fg`
+`oo mm tt vv l1 l2 fg`
 
-| byte | description                                                 |
-| ---- | ----------------------------------------------------------- |
-| `oo` | Next note time offset: see below                            |
-| `mm` | Midi note starting from 0x24 = C1 = Kick                    |
-| `tt` | Instrument type: drum = 10, bass = 11                       |
-| `vv` | Velocity, max 7f                                            |
-| `??` | TBD, related to long notes, some sort of offset bits or MSB |
-| `ll` | note length                                                 |
-| `fg` | see below                                                   |
+| byte | description                              |
+| ---- | ---------------------------------------- |
+| `oo` | Next note time offset: see below         |
+| `mm` | Midi note starting from 0x24 = C1 = Kick |
+| `tt` | Instrument type: drum = 10, bass = 11    |
+| `vv` | Velocity, max 7f                         |
+| `l1` | note length MSB                          |
+| `l2` | note length LSB first 7 bits             |
+| `fg` | see below                                |
 
 `f`
 
 | bit (76543210) | description                         |
 | -------------- | ----------------------------------- |
 | 0              | 1: no op (advance time offset only) |
-| 1              | 1: add 0x80 to offset               |
+| 1              | 1: 8th bit of offset                |
 
 `g`
 
 | bit (76543210) | description             |
 | -------------- | ----------------------- |
-| 0              | ?                       |
+| 0              | 8th bit of length LSB   |
 | 2              | 1: flam (for drum only) |
 
 Rest of the bits appear unused.
