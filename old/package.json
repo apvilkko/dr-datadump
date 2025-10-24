@@ -1,0 +1,14 @@
+{
+  "name": "dr-datadump",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "midi-parser": "^1.0.1",
+    "yaml": "^1.10.2"
+  },
+  "scripts": {
+    "decode": "node ./src/dr-datadump.js analyze",
+    "export": "node ./src/dr-datadump.js export"
+  }
+}
