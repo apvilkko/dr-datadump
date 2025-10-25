@@ -1,4 +1,5 @@
 import './style.css'
+import './dr770.ts'
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div>

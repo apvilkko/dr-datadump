@@ -12,8 +12,11 @@ describe('sysex', () => {
   describe('reader', () => {
     it('works', () => {
       const handler = vi.fn()
-      readSysex(new Uint8Array([0xf0, 0x41, 1, 0, 2, 0xf7]), handler)
-      expect(handler).toBeCalledWith(new Uint8Array([1, 0, 2]))
+      readSysex(
+        new Uint8Array([0xf0, 0x41, 0, 0, 0, 0, 1, 0, 2, 0x7d, 0xf7]),
+        handler
+      )
+      expect(handler).toBeCalledWith([new Uint8Array([0, 0, 0, 0, 1, 0, 2])])
     })
   })
 })
