@@ -1,8 +1,29 @@
 let i = 0
 
+type Address = Uint8Array
+
+class Message {
+  constructor(id?: number, addr?: Address, h?: Dict, d?: Dict[]) {
+    this.id = id ?? 0
+    this.address = addr ?? new Uint8Array()
+    this.header = h ?? {}
+    this.payload = d ?? []
+  }
+
+  log() {
+    logDict({ id: this.id, address: this.address }, true)
+    this.payload.forEach((p) => logDict(p, true))
+  }
+
+  id: number
+  address: Address
+  payload: Dict[]
+  header: Dict
+}
+
 type Dict = Record<string, number | Uint8Array>
 
-const context: { data: Uint8Array; outputs: Array<Dict>[] } = {
+const context: { data: Uint8Array; outputs: Message[][] } = {
   data: new Uint8Array(),
   outputs: [],
 }
@@ -10,15 +31,14 @@ const context: { data: Uint8Array; outputs: Array<Dict>[] } = {
 export const handler = (datas: Uint8Array[]) => {
   context.outputs = []
   for (let x = 0; x < datas.length; ++x) {
-    const output: Dict[] = []
+    const message: Message = new Message(x + 1)
     context.data = datas[x]
     i = 0
-    //add(output, readHeader())
-    readHeader()
-    add(output, readPayload())
-    context.outputs.push(output)
-    console.log('Message', x + 1)
-    output.forEach((o) => logDict(o, true))
+    message.header = readHeader()
+    message.payload = readPayload((a) => {
+      message.address = a
+    })
+    message.log()
   }
 }
 
@@ -63,11 +83,12 @@ const add = (arr: Dict[], obj: Dict | Dict[]) => {
 
 const counters = { '03': -1, '03addr': 0 }
 
-const readPayload = () => {
+const readPayload = (addressSet: (x: Address) => void): Dict[] => {
   const outputs: Dict[] = []
   while (i < context.data.length) {
     const address = context.data.subarray(i, i + 4)
-    logDict({ address })
+    addressSet(address)
+    //logDict({ address })
     if (context.data[i] === 3) {
       i += 4
       add(outputs, readCommand03(address))
