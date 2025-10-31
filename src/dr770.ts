@@ -3,43 +3,91 @@ let i = 0
 type Address = Uint8Array
 
 class Message {
-  constructor(id?: number, addr?: Address, h?: Dict, d?: Dict[]) {
+  constructor(
+    id?: number,
+    addr?: Address,
+    h?: Dict,
+    d?: Dict[],
+    r?: Uint8Array
+  ) {
     this.id = id ?? 0
     this.address = addr ?? new Uint8Array()
     this.header = h ?? {}
     this.payload = d ?? []
+    this.raw = r ?? new Uint8Array()
   }
 
   log() {
-    logDict({ id: this.id, address: this.address }, true)
-    this.payload.forEach((p) => logDict(p, true))
+    logDict(
+      { id: this.id, address: this.address, length: this.raw.length },
+      true
+    )
+    //this.payload.forEach((p) => logDict(p, true))
+    logDict({ raw: this.raw })
   }
 
   id: number
   address: Address
   payload: Dict[]
   header: Dict
+  raw: Uint8Array
 }
 
 type Dict = Record<string, number | Uint8Array>
 
-const context: { data: Uint8Array; outputs: Message[][] } = {
+const context: { data: Uint8Array; messages: Message[] } = {
   data: new Uint8Array(),
-  outputs: [],
+  messages: [],
 }
 
 export const handler = (datas: Uint8Array[]) => {
-  context.outputs = []
+  context.messages = []
+  const rawMessages: Message[] = []
   for (let x = 0; x < datas.length; ++x) {
     const message: Message = new Message(x + 1)
     context.data = datas[x]
     i = 0
     message.header = readHeader()
-    message.payload = readPayload((a) => {
-      message.address = a
-    })
-    message.log()
+    const [addr, data] = readRawPayload()
+    message.address = addr
+    message.raw = data
+    rawMessages.push(message)
   }
+
+  ;[1, 2, 3, 4].forEach((messageId) => {
+    const filtered = rawMessages.filter((m) => m.address[0] === messageId)
+    console.log(
+      'rawMessages',
+      messageId,
+      filtered.length,
+      filtered.reduce((acc, curr) => acc + curr.raw.length, 0)
+    )
+    if (messageId === 3 || messageId === 4) {
+      // join
+      const totalLength = filtered.reduce(
+        (acc, curr) => acc + curr.raw.length,
+        0
+      )
+      const joinedBuffer = new Uint8Array(totalLength)
+      let offset = 0
+      const combined = filtered.reduce((acc, curr) => {
+        if (acc.address.length === 0) {
+          acc.id = curr.id
+          acc.address = curr.address
+          acc.header = curr.header
+          acc.raw = joinedBuffer
+        }
+        acc.raw.set(curr.raw, offset)
+        offset += curr.raw.length
+        return acc
+      }, new Message())
+      context.messages.push(combined)
+    } else {
+      context.messages = [...context.messages, ...filtered]
+    }
+  })
+
+  context.messages.forEach((x) => x.log())
 }
 
 const readHeader = () => {
@@ -59,14 +107,29 @@ const readBytes = (names: string[]) => {
 
 const toHex = (n: number) => n.toString(16).padStart(2, '0')
 
+const logArray = (arr: Uint8Array) => {
+  const perRow = 350
+  let counter = 0
+  let out: string[] = []
+  const data = [...arr]
+  while (counter < data.length) {
+    out = [
+      ...out,
+      ...data.slice(counter, counter + perRow).map((x) => toHex(x)),
+    ]
+    out.push('\n')
+    counter += perRow
+  }
+
+  return out.join(' ')
+}
+
 const logDict = (dict: Dict, compact = false) => {
   const out: string[] = []
   Object.keys(dict).map((k) =>
     out.push(
       `${k}\t${
-        typeof dict[k] === 'number'
-          ? toHex(dict[k])
-          : [...dict[k]].map((x) => toHex(x)).join(' ')
+        typeof dict[k] === 'number' ? toHex(dict[k]) : logArray(dict[k])
       }`
     )
   )
@@ -82,6 +145,92 @@ const add = (arr: Dict[], obj: Dict | Dict[]) => {
 }
 
 const counters = { '03': -1, '03addr': 0 }
+
+const readRawPayload = () => {
+  const address = context.data.subarray(i, i + 4)
+  i += 4
+  const data = context.data.subarray(i)
+  return [address, data]
+}
+
+/*
+
+...
+ 08 00 00 04 00 03 00 00 00 00 0f 0f 0f 0f
+ 
+ -- O, FTV, FTO, V links?
+ 00 03 01 0d
+ 00 03 01 0d
+ 00 03 01 0d
+ 00 03 01 0d
+ 
+ -- pattern name (0x2d = "-")
+ 02 0d 02 0d 02 0d 02 0d 02 0d 02 0d 02 0d
+ 
+ 08 00 00 04 00 03 00 00 00 00 0f 0f 0f 0f
+ 
+ 00 03 01 0e
+ 00 03 01 0e
+ 00 03 01 0e
+ 00 03 01 0e
+ 
+ 02 0d 02 0d 02 0d 02 0d 02 0d 02 0d 02 0d
+ 
+ 08 00 00 04 00 03 00 00 00 00 0f 0f 0f 0f
+ 
+ 00 03 01 0f
+ 00 03 01 0f
+ 00 03 01 0f
+ 00 03 01 0f
+ 
+ -- ? note ? t1 t2 t3
+
+ 03 03 0e 00 00 00
+ 03 0b 0e 00 00 00
+ 02 03 0e 00 00 00
+ 03 0b 0e 00 03 00
+ 03 03 0e 00 04 08
+ 03 0b 0e 00 04 08
+ 02 03 0e 00 04 08
+ 03 07 0e 00 06 00
+ 03 0b 0e 00 06 00
+ 03 03 0e 00 09 00
+ 03 0b 0e 00 09 00
+ 03 0b 0e 00 0a 08
+ 02 03 0e 00 0a 08
+ 03 0b 0e 00 0c 00
+ 03 03 0e 00 0f 00
+ 03 0b 0e 00 0f 00
+ 03 0b 0e 00 00 00
+ 03 03 0e 00 00 00
+ 03 0b 0e 00 03 00
+ 03 0b 0e 00 06 00
+ 03 07 0e 00 06 00
+ 03 0b 0e 00 09 00
+ 03 03 0e 00 0c 00
+ 03 0b 0e 00 0c 00
+ 03 0b 0e 00 0f 00
+ 03 07 0e 01 02 00
+ 03 0b 0e 01 02 00
+ 03 0b 0e 01 05 00
+ 03 03 0e 01 08 00
+ 03 0b 0e 01 08 00
+ 03 0b 0e 01 0b 00
+ 03 0a 0a 01 0e 00
+ 02 03 0e 00 0f 00
+ 03 0b 0e 01 00 08
+ 03 07 0e 01 02 00
+ 03 0b 0e 01 02 00
+ 03 0f 0e 01 03 08
+ 03 0b 0e 01 05 00
+ 02 0b 0e 01 05 00
+ 03 0b 0e 01 06 08
+ 03 07 0e 01 02 00
+ 03 0b 0e 01 02 00
+ 
+ 00 00 00 00 00 00 00 00 00 00 00 ...
+
+*/
 
 const readPayload = (addressSet: (x: Address) => void): Dict[] => {
   const outputs: Dict[] = []
