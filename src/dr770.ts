@@ -33,7 +33,7 @@ class Message {
   raw: Uint8Array
 }
 
-type Dict = Record<string, number | Uint8Array>
+type Dict = Record<string, number | Uint8Array | string>
 
 const toSwing = (x: number) => {
   switch (x) {
@@ -59,14 +59,42 @@ const toSwing = (x: number) => {
   }
 }
 
+const toQuantize = (x: number) => {
+  switch (x) {
+    case 0:
+      return 'off'
+    case 1:
+      return '32nd'
+    case 2:
+      return '16th T'
+    case 3:
+      return '16th'
+    case 4:
+      return '8th T'
+    case 5:
+      return '8th'
+    case 6:
+      return 'Q (4)'
+    case 7:
+      return 'H (2)'
+    default:
+      return -1
+    //throw new Error('invalid quantize value ' + x)
+  }
+}
+
+const diffOrEmpty = (a: number, b: number) => (a === b ? '-' : String(a))
+
 class Pattern {
   constructor(
     id?: number,
     name?: string,
     props?: any,
-    links?: Uint8Array[],
+    links?: number[],
     drumkit?: number,
-    swing?: number
+    swing?: number,
+    quantize?: number,
+    beatLength?: number
   ) {
     this.id = id ?? 0
     this.name = name ?? ''
@@ -74,28 +102,42 @@ class Pattern {
     this.links = links ?? []
     this.drumkit = drumkit ?? 0
     this.swing = swing ?? 0
+    this.quantize = quantize ?? 3
+    this.beatLength = beatLength ?? 4
   }
 
   id: number
   name: string
   props: any
-  links: Uint8Array[]
+  links: number[]
   drumkit: number
   swing: number
+  quantize: number
+  beatLength: number
 
   isEmpty() {
-    return this.props.subarray(10).every((x) => x === 0xf)
+    return this.props.subarray(10).every((x: number) => x === 0xf)
   }
 
   log() {
     const emptyStr = this.isEmpty() ? ' | (empty)' : ''
     console.log(
-      `Pattern ${this.id}: ${this.name} | drumkit ${
-        this.drumkit + 1
-      } | swing ${toSwing(this.swing)}${emptyStr}`
+      `Pattern ${this.id}: ${this.name} | beat len ${
+        this.beatLength
+      } | drumkit ${this.drumkit + 1} | swing ${toSwing(
+        this.swing
+      )}% | quantize ${toQuantize(this.quantize)}${emptyStr}`
     )
     logDict({ props: this.props }, true)
-    this.links.forEach((x) => logDict({ link: x }, true))
+    logDict(
+      {
+        O: String(this.links[0]),
+        FTV: diffOrEmpty(this.links[1], this.links[0]),
+        V: diffOrEmpty(this.links[2], this.links[0]),
+        FTO: diffOrEmpty(this.links[3], this.links[0]),
+      },
+      true
+    )
   }
 }
 
@@ -198,7 +240,11 @@ const logDict = (dict: Dict, compact = false) => {
   Object.keys(dict).map((k) =>
     out.push(
       `${k}\t${
-        typeof dict[k] === 'number' ? toHex(dict[k]) : logArray(dict[k])
+        typeof dict[k] === 'string'
+          ? dict[k]
+          : typeof dict[k] === 'number'
+          ? toHex(dict[k])
+          : logArray(dict[k])
       }`
     )
   )
@@ -406,12 +452,19 @@ const readCommand03 = (address: Uint8Array) => {
   return output
 }
 
-const toChar = (data: Uint8Array) => {
-  if (data.length !== 2) {
-    throw new Error('expected 2 bytes')
+const readNibbles = (data: Uint8Array, expected = 2) => {
+  if (data.length !== expected) {
+    throw new Error(`expected ${expected} bytes`)
   }
-  const charcode = ((data[0] & 0xf) << 4) | (data[1] & 0xf)
-  return String.fromCharCode(charcode)
+  let result = 0
+  for (let i = 0; i < expected; ++i) {
+    result += (data[expected - 1 - i] & 0xf) << (4 * i)
+  }
+  return result
+}
+
+const toChar = (data: Uint8Array) => {
+  return String.fromCharCode(readNibbles(data))
 }
 
 // user patterns
@@ -436,40 +489,88 @@ const readCommand04 = (message: Message): Pattern[] => {
     // 08 00 00 04 00 03 00 01 00 00 00 00 00 05
 
     // Bytes
-    // 0-3: ?
+    // 0-1: ?, 08 00 normally, 04 00 on swung patterns
+    // 2-3: beat length
     // 4: swing: 50, 54, 58, 62, 67, 71, 75, 80 %
-    // 5-6: ?
-    // 7: drumkit
+    // 5: quantize: off=0, 32=1, 16t=2, 16=3, 8t=4, 8=5, 4=6, 2=7
+    // 6-7: drumkit
     // 8-9: ?
-    // 10-13: all 0f for empty
+    // 10-13: offset to pattern memory (*96), all 0f for empty
 
     pattern.props = message.raw.subarray(i, i + 14)
     if (pattern.props.every((x) => x === 0)) {
       console.log('invalid pattern')
+      i -= 14
       break
     }
-    pattern.drumkit = pattern.props[7]
+    pattern.drumkit = readNibbles(pattern.props.subarray(6, 8))
     pattern.swing = pattern.props[4]
+    pattern.quantize = pattern.props[5]
+    pattern.beatLength = readNibbles(pattern.props.subarray(2, 4))
 
     i += 14
 
-    // Links: 4 * 4 bytes
-
+    // Links: 4 * 4 bytes: O - FTV - V - FTO
     pattern.links = []
     for (let b = 0; b < 4; ++b) {
-      const link = message.raw.subarray(i + b * 4, i + b * 4 + 4)
+      const link =
+        readNibbles(message.raw.subarray(i + b * 4, i + b * 4 + 4), 4) + 1
       pattern.links.push(link)
     }
 
-    if (pattern.links.some((x) => x.length !== 4)) {
-      console.log('invalid pattern')
+    if (pattern.links.some((x) => x < 401 || x > 800)) {
+      // user patterns are 401-800
+      i -= 28
       break
     }
 
     i += 16
 
+    pattern.id = pattern.links[0]
     patterns.push(pattern)
 
+    if (i >= message.raw.length) {
+      break
+    }
+  }
+
+  console.log('broke at', i, message.raw.length)
+  //logDict({ raw: message.raw.subarray(i) })
+
+  let startPos = i
+  let segment = 1
+  let onBreak = false
+  logDict({ segment }, true)
+  while (true) {
+    const note = message.raw.subarray(i, i + 3)
+    const pos = readNibbles(message.raw.subarray(i + 3, i + 6), 3)
+    const pitch = readNibbles(note.subarray(0, 2))
+
+    if (note[0] === 0 && note[1] === 0 && note[2] === 0) {
+      onBreak = true
+    }
+
+    if (onBreak && !(note[0] === 0 && note[1] === 0 && note[2] === 0)) {
+      segment++
+      logDict({ segment, pos: String(i - startPos) }, true)
+      onBreak = false
+    }
+
+    if (!onBreak) {
+      logDict(
+        {
+          raw: message.raw.subarray(i, i + 6),
+          note,
+          pos,
+          pitch: String(pitch),
+        },
+        true
+      )
+    } else {
+      logDict({ break: 0 })
+    }
+
+    i += 6
     if (i >= message.raw.length) {
       break
     }
