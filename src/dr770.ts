@@ -35,10 +35,76 @@ class Message {
 
 type Dict = Record<string, number | Uint8Array>
 
-const context: { data: Uint8Array; messages: Message[] } = {
-  data: new Uint8Array(),
-  messages: [],
+const toSwing = (x: number) => {
+  switch (x) {
+    case 0:
+      return 50
+    case 1:
+      return 54
+    case 2:
+      return 58
+    case 3:
+      return 62
+    case 4:
+      return 67
+    case 5:
+      return 71
+    case 6:
+      return 75
+    case 7:
+      return 80
+    default:
+      return -1
+    //throw new Error('invalid swing value ' + x)
+  }
 }
+
+class Pattern {
+  constructor(
+    id?: number,
+    name?: string,
+    props?: any,
+    links?: Uint8Array[],
+    drumkit?: number,
+    swing?: number
+  ) {
+    this.id = id ?? 0
+    this.name = name ?? ''
+    this.props = props ?? ''
+    this.links = links ?? []
+    this.drumkit = drumkit ?? 0
+    this.swing = swing ?? 0
+  }
+
+  id: number
+  name: string
+  props: any
+  links: Uint8Array[]
+  drumkit: number
+  swing: number
+
+  isEmpty() {
+    return this.props.subarray(10).every((x) => x === 0xf)
+  }
+
+  log() {
+    const emptyStr = this.isEmpty() ? ' | (empty)' : ''
+    console.log(
+      `Pattern ${this.id}: ${this.name} | drumkit ${
+        this.drumkit + 1
+      } | swing ${toSwing(this.swing)}${emptyStr}`
+    )
+    logDict({ props: this.props }, true)
+    this.links.forEach((x) => logDict({ link: x }, true))
+  }
+}
+
+const context: { data: Uint8Array; messages: Message[]; patterns: Pattern[] } =
+  {
+    data: new Uint8Array(),
+    messages: [],
+    patterns: [],
+  }
 
 export const handler = (datas: Uint8Array[]) => {
   context.messages = []
@@ -87,7 +153,10 @@ export const handler = (datas: Uint8Array[]) => {
     }
   })
 
-  context.messages.forEach((x) => x.log())
+  context.patterns = readCommand04(
+    context.messages.filter((x) => x.address[0] === 4)[0]
+  )
+  context.patterns.forEach((x) => x.log())
 }
 
 const readHeader = () => {
@@ -337,9 +406,74 @@ const readCommand03 = (address: Uint8Array) => {
   return output
 }
 
+const toChar = (data: Uint8Array) => {
+  if (data.length !== 2) {
+    throw new Error('expected 2 bytes')
+  }
+  const charcode = ((data[0] & 0xf) << 4) | (data[1] & 0xf)
+  return String.fromCharCode(charcode)
+}
+
 // user patterns
-const readCommand04 = (address: Uint8Array) => {
-  const output: Dict[] = []
-  i += 4
-  return output
+const readCommand04 = (message: Message): Pattern[] => {
+  const patterns: Pattern[] = []
+  i = 0
+
+  while (true) {
+    const pattern = new Pattern(i)
+
+    // Name: 7 * 2 bytes
+    const nameArr = []
+    for (let b = 0; b < 7; b++) {
+      nameArr.push(toChar(message.raw.subarray(i + 2 * b, i + 2 * b + 2)))
+    }
+    pattern.name = nameArr.join('')
+
+    i += 14
+
+    // Properties: 14 bytes
+    // 08 00 00 04 00 03 00 00 00 00 0f 0f 0f 0f
+    // 08 00 00 04 00 03 00 01 00 00 00 00 00 05
+
+    // Bytes
+    // 0-3: ?
+    // 4: swing: 50, 54, 58, 62, 67, 71, 75, 80 %
+    // 5-6: ?
+    // 7: drumkit
+    // 8-9: ?
+    // 10-13: all 0f for empty
+
+    pattern.props = message.raw.subarray(i, i + 14)
+    if (pattern.props.every((x) => x === 0)) {
+      console.log('invalid pattern')
+      break
+    }
+    pattern.drumkit = pattern.props[7]
+    pattern.swing = pattern.props[4]
+
+    i += 14
+
+    // Links: 4 * 4 bytes
+
+    pattern.links = []
+    for (let b = 0; b < 4; ++b) {
+      const link = message.raw.subarray(i + b * 4, i + b * 4 + 4)
+      pattern.links.push(link)
+    }
+
+    if (pattern.links.some((x) => x.length !== 4)) {
+      console.log('invalid pattern')
+      break
+    }
+
+    i += 16
+
+    patterns.push(pattern)
+
+    if (i >= message.raw.length) {
+      break
+    }
+  }
+
+  return patterns
 }
