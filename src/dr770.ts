@@ -1,145 +1,9 @@
+import { Message } from './entities/message.ts'
+import { NoteEvent } from './entities/noteevent.ts'
+import { Pattern } from './entities/pattern.ts'
+import type { Dict } from './types.ts'
+
 let i = 0
-
-type Address = Uint8Array
-
-class Message {
-  constructor(
-    id?: number,
-    addr?: Address,
-    h?: Dict,
-    d?: Dict[],
-    r?: Uint8Array
-  ) {
-    this.id = id ?? 0
-    this.address = addr ?? new Uint8Array()
-    this.header = h ?? {}
-    this.payload = d ?? []
-    this.raw = r ?? new Uint8Array()
-  }
-
-  log() {
-    logDict(
-      { id: this.id, address: this.address, length: this.raw.length },
-      true
-    )
-    //this.payload.forEach((p) => logDict(p, true))
-    logDict({ raw: this.raw })
-  }
-
-  id: number
-  address: Address
-  payload: Dict[]
-  header: Dict
-  raw: Uint8Array
-}
-
-type Dict = Record<string, number | Uint8Array | string>
-
-const toSwing = (x: number) => {
-  switch (x) {
-    case 0:
-      return 50
-    case 1:
-      return 54
-    case 2:
-      return 58
-    case 3:
-      return 62
-    case 4:
-      return 67
-    case 5:
-      return 71
-    case 6:
-      return 75
-    case 7:
-      return 80
-    default:
-      return -1
-    //throw new Error('invalid swing value ' + x)
-  }
-}
-
-const toQuantize = (x: number) => {
-  switch (x) {
-    case 0:
-      return 'off'
-    case 1:
-      return '32nd'
-    case 2:
-      return '16th T'
-    case 3:
-      return '16th'
-    case 4:
-      return '8th T'
-    case 5:
-      return '8th'
-    case 6:
-      return 'Q (4)'
-    case 7:
-      return 'H (2)'
-    default:
-      return -1
-    //throw new Error('invalid quantize value ' + x)
-  }
-}
-
-const diffOrEmpty = (a: number, b: number) => (a === b ? '-' : String(a))
-
-class Pattern {
-  constructor(
-    id?: number,
-    name?: string,
-    props?: any,
-    links?: number[],
-    drumkit?: number,
-    swing?: number,
-    quantize?: number,
-    beatLength?: number
-  ) {
-    this.id = id ?? 0
-    this.name = name ?? ''
-    this.props = props ?? ''
-    this.links = links ?? []
-    this.drumkit = drumkit ?? 0
-    this.swing = swing ?? 0
-    this.quantize = quantize ?? 3
-    this.beatLength = beatLength ?? 4
-  }
-
-  id: number
-  name: string
-  props: any
-  links: number[]
-  drumkit: number
-  swing: number
-  quantize: number
-  beatLength: number
-
-  isEmpty() {
-    return this.props.subarray(10).every((x: number) => x === 0xf)
-  }
-
-  log() {
-    const emptyStr = this.isEmpty() ? ' | (empty)' : ''
-    console.log(
-      `Pattern ${this.id}: ${this.name} | beat len ${
-        this.beatLength
-      } | drumkit ${this.drumkit + 1} | swing ${toSwing(
-        this.swing
-      )}% | quantize ${toQuantize(this.quantize)}${emptyStr}`
-    )
-    logDict({ props: this.props }, true)
-    logDict(
-      {
-        O: String(this.links[0]),
-        FTV: diffOrEmpty(this.links[1], this.links[0]),
-        V: diffOrEmpty(this.links[2], this.links[0]),
-        FTO: diffOrEmpty(this.links[3], this.links[0]),
-      },
-      true
-    )
-  }
-}
 
 const context: { data: Uint8Array; messages: Message[]; patterns: Pattern[] } =
   {
@@ -214,41 +78,6 @@ const readBytes = (names: string[]) => {
     output[names[x]] = context.data[i++]
   }
   return output
-}
-
-const toHex = (n: number) => n.toString(16).padStart(2, '0')
-
-const logArray = (arr: Uint8Array) => {
-  const perRow = 350
-  let counter = 0
-  let out: string[] = []
-  const data = [...arr]
-  while (counter < data.length) {
-    out = [
-      ...out,
-      ...data.slice(counter, counter + perRow).map((x) => toHex(x)),
-    ]
-    out.push('\n')
-    counter += perRow
-  }
-
-  return out.join(' ')
-}
-
-const logDict = (dict: Dict, compact = false) => {
-  const out: string[] = []
-  Object.keys(dict).map((k) =>
-    out.push(
-      `${k}\t${
-        typeof dict[k] === 'string'
-          ? dict[k]
-          : typeof dict[k] === 'number'
-          ? toHex(dict[k])
-          : logArray(dict[k])
-      }`
-    )
-  )
-  console.log(out.join(compact ? ' | ' : '\n'))
 }
 
 const add = (arr: Dict[], obj: Dict | Dict[]) => {
@@ -347,7 +176,7 @@ const readRawPayload = () => {
 
 */
 
-const readPayload = (addressSet: (x: Address) => void): Dict[] => {
+/*const readPayload = (addressSet: (x: Address) => void): Dict[] => {
   const outputs: Dict[] = []
   while (i < context.data.length) {
     const address = context.data.subarray(i, i + 4)
@@ -373,7 +202,7 @@ const readPayload = (addressSet: (x: Address) => void): Dict[] => {
     }
   }
   return outputs
-}
+}*/
 
 const matchAddress = (address: Uint8Array, other: Array<number | string>) =>
   address.length === other.length &&
@@ -467,6 +296,37 @@ const toChar = (data: Uint8Array) => {
   return String.fromCharCode(readNibbles(data))
 }
 
+const readPatternData = (data: Uint8Array, offset: number) => {
+  if (offset >= data.length) return []
+
+  let c = offset
+  const notes: NoteEvent[] = []
+  while (true) {
+    const raw = data.subarray(c, c + 6)
+    // first 6 bits = pad number
+    const pad = readNibbles(data.subarray(c, c + 2)) >> 2
+    // next 5 bits = velocity
+    const velocity = (readNibbles(data.subarray(c + 1, c + 3)) >> 1) & 0b11111
+    // rest = position (maybe includes one bit extra ?)
+    const pos = readNibbles(data.subarray(c + 3, c + 6), 3)
+
+    // 37e = 0011 0111 1110 = 00 1101 11111 0
+    // 352 = 0011 0101 0010 = 00 1101 01001 0
+    // e 31
+    // 2 9
+
+    if (raw[0] === 0 && raw[1] === 0) {
+      break
+    }
+    notes.push(new NoteEvent(pad, pos, velocity, raw))
+    c += 6
+    if (c >= data.length) {
+      break
+    }
+  }
+  return notes
+}
+
 // user patterns
 const readCommand04 = (message: Message): Pattern[] => {
   const patterns: Pattern[] = []
@@ -507,6 +367,7 @@ const readCommand04 = (message: Message): Pattern[] => {
     pattern.swing = pattern.props[4]
     pattern.quantize = pattern.props[5]
     pattern.beatLength = readNibbles(pattern.props.subarray(2, 4))
+    pattern.dataOffset = readNibbles(pattern.props.subarray(10, 14), 4) * 96
 
     i += 14
 
@@ -537,44 +398,11 @@ const readCommand04 = (message: Message): Pattern[] => {
   console.log('broke at', i, message.raw.length)
   //logDict({ raw: message.raw.subarray(i) })
 
-  let startPos = i
-  let segment = 1
-  let onBreak = false
-  logDict({ segment }, true)
-  while (true) {
-    const note = message.raw.subarray(i, i + 3)
-    const pos = readNibbles(message.raw.subarray(i + 3, i + 6), 3)
-    const pitch = readNibbles(note.subarray(0, 2))
+  const startPos = i
 
-    if (note[0] === 0 && note[1] === 0 && note[2] === 0) {
-      onBreak = true
-    }
-
-    if (onBreak && !(note[0] === 0 && note[1] === 0 && note[2] === 0)) {
-      segment++
-      logDict({ segment, pos: String(i - startPos) }, true)
-      onBreak = false
-    }
-
-    if (!onBreak) {
-      logDict(
-        {
-          raw: message.raw.subarray(i, i + 6),
-          note,
-          pos,
-          pitch: String(pitch),
-        },
-        true
-      )
-    } else {
-      logDict({ break: 0 })
-    }
-
-    i += 6
-    if (i >= message.raw.length) {
-      break
-    }
-  }
+  patterns.forEach((p) => {
+    p.data = readPatternData(message.raw, startPos + p.dataOffset)
+  })
 
   return patterns
 }
