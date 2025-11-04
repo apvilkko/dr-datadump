@@ -2,6 +2,9 @@ import { Message } from './entities/message.ts'
 import { NoteEvent } from './entities/noteevent.ts'
 import { Pattern } from './entities/pattern.ts'
 import type { Dict } from './types.ts'
+import { logDict } from './util.ts'
+
+const BLOCK_SIZE = 96
 
 let i = 0
 
@@ -299,9 +302,15 @@ const toChar = (data: Uint8Array) => {
 const readPatternData = (data: Uint8Array, offset: number) => {
   if (offset >= data.length) return []
 
+  const startPos = offset
   let c = offset
   const notes: NoteEvent[] = []
+  //logDict({ raw: data.subarray(c, c + 4096) })
+  let lastPos = 0
   while (true) {
+    if (c >= data.length) {
+      break
+    }
     const raw = data.subarray(c, c + 6)
     // first 6 bits = pad number
     const pad = readNibbles(data.subarray(c, c + 2)) >> 2
@@ -315,14 +324,45 @@ const readPatternData = (data: Uint8Array, offset: number) => {
     // e 31
     // 2 9
 
-    if (raw[0] === 0 && raw[1] === 0) {
+    const positionDrops = pos < lastPos
+    lastPos = pos
+    const atBlockStart = (c - startPos) % BLOCK_SIZE === 0
+    const allZeros = raw.every((x) => x === 0)
+
+    // If it's all zeros => skip to next block
+    if (atBlockStart && allZeros) {
+      console.log('all zeros skipping', c, c + BLOCK_SIZE)
+      c += BLOCK_SIZE
+      continue
+    }
+
+    if (atBlockStart && positionDrops && !allZeros) {
+      console.log(offset, 'end reading at ', c, raw)
+      // Start of new data, end reading
       break
     }
+
+    // If position drops: ignore rest of block and continue with next block
+    if (!atBlockStart && positionDrops) {
+      const skipAmount = BLOCK_SIZE - ((c - startPos) % BLOCK_SIZE)
+      console.log(
+        offset,
+        'skipping at',
+        c,
+        c - startPos,
+        'amount',
+        skipAmount,
+        c + skipAmount,
+        'position',
+        pos
+      )
+      c += skipAmount
+      continue
+    }
+
     notes.push(new NoteEvent(pad, pos, velocity, raw))
     c += 6
-    if (c >= data.length) {
-      break
-    }
+    lastPos = pos
   }
   return notes
 }
@@ -355,7 +395,7 @@ const readCommand04 = (message: Message): Pattern[] => {
     // 5: quantize: off=0, 32=1, 16t=2, 16=3, 8t=4, 8=5, 4=6, 2=7
     // 6-7: drumkit
     // 8-9: ?
-    // 10-13: offset to pattern memory (*96), all 0f for empty
+    // 10-13: offset to pattern memory (*BLOCK_SIZE), all 0f for empty
 
     pattern.props = message.raw.subarray(i, i + 14)
     if (pattern.props.every((x) => x === 0)) {
@@ -367,7 +407,8 @@ const readCommand04 = (message: Message): Pattern[] => {
     pattern.swing = pattern.props[4]
     pattern.quantize = pattern.props[5]
     pattern.beatLength = readNibbles(pattern.props.subarray(2, 4))
-    pattern.dataOffset = readNibbles(pattern.props.subarray(10, 14), 4) * 96
+    pattern.dataOffset =
+      readNibbles(pattern.props.subarray(10, 14), 4) * BLOCK_SIZE
 
     i += 14
 
@@ -401,6 +442,7 @@ const readCommand04 = (message: Message): Pattern[] => {
   const startPos = i
 
   patterns.forEach((p) => {
+    console.log('pattern', p.id, 'reading at', startPos + p.dataOffset)
     p.data = readPatternData(message.raw, startPos + p.dataOffset)
   })
 
