@@ -2,10 +2,8 @@ import { Message } from './entities/message.ts'
 import { NoteEvent } from './entities/noteevent.ts'
 import { Pattern } from './entities/pattern.ts'
 import type { Dict } from './types.ts'
-import { logDict } from './util.ts'
 
 const BLOCK_SIZE = 96
-const PPQN = 96
 
 let i = 0
 
@@ -287,11 +285,11 @@ const readCommand03 = (address: Uint8Array) => {
 
 const readNibbles = (data: Uint8Array, expected = 2) => {
   if (data.length !== expected) {
-    throw new Error(`expected ${expected} bytes`)
+    throw new Error(`expected ${expected} bytes, got ${data.length}`)
   }
   let result = 0
-  for (let i = 0; i < expected; ++i) {
-    result += (data[expected - 1 - i] & 0xf) << (4 * i)
+  for (let ii = 0; ii < expected; ++ii) {
+    result += (data[expected - 1 - ii] & 0xf) << (4 * ii)
   }
   return result
 }
@@ -302,85 +300,41 @@ const toChar = (data: Uint8Array) => {
 
 const readPatternData = (
   data: Uint8Array,
-  offset: number,
-  beatLength: number
+  startOffset: number,
+  offsets: number[]
 ) => {
-  const maxPos = beatLength * PPQN
-  if (offset >= data.length) return []
-
-  const startPos = offset
-  let c = offset
-  const notes: NoteEvent[] = []
-  logDict({ raw: data.subarray(c, c + 4096) })
   let lastPos = 0
-  let skipping = false
-  while (true) {
-    skipping = false
-    if (c >= data.length) {
-      break
-    }
-    const raw = data.subarray(c, c + 6)
-    // first 6 bits = pad number
-    const pad = readNibbles(data.subarray(c, c + 2)) >> 2
-    // next 5 bits = velocity
-    const velocity = (readNibbles(data.subarray(c + 1, c + 3)) >> 1) & 0b11111
-    // rest = position (maybe includes one bit extra ?)
-    const pos = readNibbles(data.subarray(c + 3, c + 6), 3)
+  const notes: NoteEvent[] = []
 
-    // 37e = 0011 0111 1110 = 00 1101 11111 0
-    // 352 = 0011 0101 0010 = 00 1101 01001 0
-    // e 31
-    // 2 9
+  for (let o = 0; o < offsets.length; ++o) {
+    const offset = startOffset + offsets[o] * BLOCK_SIZE
+    const block = data.subarray(offset, offset + BLOCK_SIZE)
+    let c = 0
+    while (true) {
+      if (c >= block.length) {
+        break
+      }
+      const raw = block.subarray(c, c + 6)
+      // first 6 bits = pad number
+      const pad = readNibbles(block.subarray(c, c + 2)) >> 2
+      // next 5 bits = velocity
+      const velocity =
+        (readNibbles(block.subarray(c + 1, c + 3)) >> 1) & 0b11111
+      // rest = position (maybe includes one bit extra ?)
+      const pos = readNibbles(block.subarray(c + 3, c + 6), 3)
 
-    if (pos >= maxPos) {
-      console.log('maxPos reached')
-      break
-    }
+      if (pos < lastPos) {
+        // no more valid notes in this block
+        break
+      }
 
-    const positionDrops = pos < lastPos
-    const atBlockStart = (c - startPos) % BLOCK_SIZE === 0
-    const allZeros = raw.every((x) => x === 0)
-
-    // If it's all zeros => skip to next block
-    /*if (atBlockStart && allZeros) {
-      console.log('all zeros skipping', c, c + BLOCK_SIZE)
-      c += BLOCK_SIZE
-      continue
-    }*/
-
-    /*if (atBlockStart && positionDrops && !allZeros) {
-      console.log(offset, 'end reading at ', c, raw)
-      // Start of new data, end reading
-      break
-    }*/
-
-    // If position drops: ignore rest of block and continue with next block
-    if (positionDrops) {
-      const skipAmount = BLOCK_SIZE - ((c - startPos) % BLOCK_SIZE)
-      console.log(
-        offset,
-        'skipping at',
-        c,
-        c - startPos,
-        'amount',
-        skipAmount,
-        c + skipAmount,
-        'position',
-        pos
-      )
-      c += skipAmount
-      skipping = true
-    }
-
-    if (!skipping) {
       const ne = new NoteEvent(pad, pos, velocity, raw)
-      ne.log()
       notes.push(ne)
       c += 6
-
       lastPos = pos
     }
   }
+
   return notes
 }
 
@@ -424,8 +378,7 @@ const readCommand04 = (message: Message): Pattern[] => {
     pattern.swing = pattern.props[4]
     pattern.quantize = pattern.props[5]
     pattern.beatLength = readNibbles(pattern.props.subarray(2, 4))
-    pattern.dataOffset =
-      readNibbles(pattern.props.subarray(10, 14), 4) * BLOCK_SIZE
+    pattern.dataOffset = readNibbles(pattern.props.subarray(10, 14), 4)
 
     i += 14
 
@@ -458,10 +411,36 @@ const readCommand04 = (message: Message): Pattern[] => {
 
   const startPos = i
 
+  const blockOffsetTable: Record<number, number> = {}
+  i = message.raw.length - 4200
+  let index = 0
+  while (i < message.raw.length) {
+    const blockOffset = readNibbles(message.raw.subarray(i, i + 4), 4)
+    blockOffsetTable[index] = blockOffset
+    index++
+    i += 4
+  }
+
   patterns.forEach((p) => {
-    console.log('pattern', p.id, 'reading at', startPos + p.dataOffset)
-    p.data = readPatternData(message.raw, startPos + p.dataOffset, p.beatLength)
+    const offsets = getBlockOffsets(p.dataOffset, blockOffsetTable)
+    p.data = readPatternData(message.raw, startPos, offsets)
   })
 
   return patterns
+}
+
+const getBlockOffsets = (
+  offset: number,
+  blockOffsetTable: Record<number, number>
+) => {
+  const out: number[] = [offset]
+  let current = offset
+  while (true) {
+    current = blockOffsetTable[current]
+    if (typeof current === 'undefined' || current > 65530) {
+      break
+    }
+    out.push(current)
+  }
+  return out
 }
